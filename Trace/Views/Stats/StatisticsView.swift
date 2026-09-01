@@ -63,9 +63,14 @@ struct StatisticsView: View {
                     StatFigure(label: "Transactions", value: "\(stats.transactionCount)", size: 24)
                 }
 
-                VStack(alignment: .leading, spacing: Theme.Space.m) {
-                    Text("Trend").traceSectionLabelStyle()
-                    TrendChart(points: stats.trend, period: period)
+                // A trend only reads as a trend with a handful of comparable
+                // buckets — an hour-by-hour chart of a single day, or an empty
+                // chart when nothing was spent, is decoration, not information.
+                if period != .day && stats.totalSpent > 0 {
+                    VStack(alignment: .leading, spacing: Theme.Space.m) {
+                        Text("Trend").traceSectionLabelStyle()
+                        TrendChart(points: stats.trend, period: period)
+                    }
                 }
 
                 if !stats.categoryTotals.isEmpty {

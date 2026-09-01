@@ -17,7 +17,12 @@ struct EntryDetailView: View {
                 Picker("Type", selection: $entry.kind) {
                     ForEach(EntryKind.allCases) { Text($0.displayName).tag($0) }
                 }
-                TextField("Description", text: $entry.title)
+                if entry.kind == .note {
+                    TextField("Note", text: $entry.title, axis: .vertical)
+                        .lineLimit(1...6)
+                } else {
+                    TextField("Description", text: $entry.title)
+                }
             }
 
             if entry.kind.isMoney {
@@ -57,9 +62,11 @@ struct EntryDetailView: View {
                 DatePicker("Date", selection: $entry.date)
             }
 
-            Section("Note") {
-                TextField("Add a note", text: noteBinding, axis: .vertical)
-                    .lineLimit(1...5)
+            if entry.kind != .note {
+                Section("Note") {
+                    TextField("Add a note", text: noteBinding, axis: .vertical)
+                        .lineLimit(1...5)
+                }
             }
 
             Section {

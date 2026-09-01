@@ -60,9 +60,9 @@ struct HomeView: View {
                     HStack(alignment: .top, spacing: Theme.Space.l) {
                         StatFigure(label: "Spent", value: Format.money(todaySpent))
                         StatFigure(
-                            label: "Activities",
+                            label: "Logged",
                             value: "\(loggedToday)",
-                            caption: loggedToday == 1 ? "thing logged" : "things logged"
+                            caption: loggedToday == 1 ? "entry" : "entries"
                         )
                     }
                 }
@@ -81,7 +81,7 @@ struct HomeView: View {
                 }
             }
             .traceScreenPadding()
-            .padding(.top, Theme.Space.xxl)
+            .padding(.top, Theme.Space.l)
             .padding(.bottom, 120)
         }
     }
