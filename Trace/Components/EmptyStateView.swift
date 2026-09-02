@@ -33,7 +33,16 @@ struct EmptyStateView: View {
                     .padding(.top, Theme.Space.s)
             }
         }
-        .frame(maxWidth: .infinity)
+        // maxHeight too, not just maxWidth: without it this VStack only
+        // hugs its own content height, so a screen's `.traceBackground()`
+        // (sized to whatever it's attached to) only ever painted a small
+        // content-sized rectangle behind it — everywhere else fell through
+        // to the system's own default background (pure white in light
+        // mode, which is what actually made empty screens read as "still
+        // white"; less visible in dark mode since Jet Black and system
+        // black are close in tone). Centering here, filling the screen, is
+        // what makes every empty state show the real Trace background.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Theme.Space.xl)
     }
 }

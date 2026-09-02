@@ -8,7 +8,9 @@ import Foundation
 /// 1. **Duration** — `"Gym 1h"`, `"Python 45m"`, `"Run 1h30m"` → activity
 /// 2. **Amount** — `"McDonald's 320"`, `"Coffee 90"` → expense,
 ///    or income when an income cue is present (`"Got paid 20000"`)
-/// 3. **Neither** — `"Today was a really good day"` → note
+/// 3. **Neither** — no confident guess. There's no generic "note" kind to
+///    fall back to anymore (Live Note replaces that); the UI asks the user
+///    to pick explicitly among Expense/Income/Activity/Live Note instead.
 ///
 /// Everything here is pure Foundation so it can be unit-tested directly.
 struct QuickEntryParser {
@@ -61,15 +63,14 @@ struct QuickEntryParser {
             }
         }
 
-        // No number anywhere — treat as a note. A short fragment ("Gym") is
-        // ambiguous (activity? note?), so mark it unconfident and let the UI ask.
-        let wordCount = input.split(separator: " ").count
+        // No number anywhere — genuinely ambiguous (expense? activity? just
+        // a thought for Live Note?). Default to expense as a starting point
+        // but mark it unconfident so the UI nudges the user to actually pick.
         return ParsedDraft(
-            kind: .note,
+            kind: .expense,
             title: input,
-            note: input,
             date: now(),
-            isConfident: wordCount >= 3
+            isConfident: false
         )
     }
 

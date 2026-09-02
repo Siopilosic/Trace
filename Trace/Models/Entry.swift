@@ -58,6 +58,10 @@ final class Entry {
 
 extension Entry: StatEntry {}
 
+// MARK: - HistorySearchable conformance
+
+extension Entry: HistorySearchable {}
+
 // MARK: - Building from a parsed draft
 
 extension Entry {

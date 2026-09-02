@@ -15,7 +15,7 @@ struct EntryDetailView: View {
         Form {
             Section {
                 Picker("Type", selection: $entry.kind) {
-                    ForEach(EntryKind.allCases) { Text($0.displayName).tag($0) }
+                    ForEach(pickerKinds) { Text($0.displayName).tag($0) }
                 }
                 if entry.kind == .note {
                     TextField("Note", text: $entry.title, axis: .vertical)
@@ -73,6 +73,8 @@ struct EntryDetailView: View {
                 Button("Delete Entry", role: .destructive) { showDeleteConfirm = true }
             }
         }
+        .scrollContentBackground(.hidden)
+        .traceBackground()
         .navigationTitle(entry.kind.displayName)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -89,43 +91,20 @@ struct EntryDetailView: View {
         }
     }
 
+    /// `.note` is legacy-only — never offered as something to switch *into*.
+    /// An entry that's already a note still shows it correctly selected
+    /// (and can be changed away from it); once changed away, it can't be
+    /// changed back.
+    private var pickerKinds: [EntryKind] {
+        entry.kind == .note ? EntryKind.allCases : EntryKind.creatable
+    }
+
     private var categoryBinding: Binding<ExpenseCategory?> {
         Binding(get: { entry.category }, set: { entry.category = $0 })
     }
 
     private var noteBinding: Binding<String> {
         Binding(get: { entry.noteText ?? "" }, set: { entry.noteText = $0.isEmpty ? nil : $0 })
-    }
-}
-
-/// Hours + minutes wheels for editing an activity's length.
-private struct DurationEditor: View {
-    @Binding var seconds: Double
-
-    private var hours: Int { Int(seconds) / 3600 }
-    private var minutes: Int { (Int(seconds) % 3600) / 60 }
-
-    var body: some View {
-        HStack {
-            Picker("Hours", selection: Binding(
-                get: { hours },
-                set: { seconds = Double($0 * 3600 + minutes * 60) }
-            )) {
-                ForEach(0..<13) { Text("\($0)h").tag($0) }
-            }
-            .pickerStyle(.wheel)
-            .frame(maxWidth: .infinity)
-
-            Picker("Minutes", selection: Binding(
-                get: { minutes },
-                set: { seconds = Double(hours * 3600 + $0 * 60) }
-            )) {
-                ForEach(Array(stride(from: 0, to: 60, by: 5)), id: \.self) { Text("\($0)m").tag($0) }
-            }
-            .pickerStyle(.wheel)
-            .frame(maxWidth: .infinity)
-        }
-        .frame(height: 120)
     }
 }
 

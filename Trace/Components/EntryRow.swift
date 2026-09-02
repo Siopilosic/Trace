@@ -35,7 +35,7 @@ struct EntryRow: View {
             if let signed = entry.signedAmount {
                 Text(Format.signedMoney(signed))
                     .font(.body.monospacedDigit())
-                    .foregroundStyle(entry.kind == .income ? Color.tracePositive : .primary)
+                    .foregroundStyle(entry.kind == .income ? Color.tracePositive : Color.traceNegative)
             }
         case .activity:
             Text(Format.activityValue(seconds: entry.durationSeconds))

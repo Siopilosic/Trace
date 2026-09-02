@@ -72,11 +72,16 @@ final class QuickEntryParserTests: XCTestCase {
         XCTAssertEqual(draft.durationSeconds, 5400)
     }
 
-    func testNoteFromSentence() throws {
+    /// No generic "note" kind to fall back to anymore — Live Note replaces
+    /// it, and it isn't part of this parsing pipeline at all. Text with no
+    /// number/duration anywhere defaults to expense but stays unconfident,
+    /// so Quick Add's kind picker nudges the user to pick explicitly
+    /// (Expense/Income/Activity/Live Note).
+    func testSentenceWithNoNumberIsUnconfidentExpense() throws {
         let draft = try XCTUnwrap(parser.parse("Today was actually a really good day"))
-        XCTAssertEqual(draft.kind, .note)
-        XCTAssertTrue(draft.isConfident)
-        XCTAssertEqual(draft.note, "Today was actually a really good day")
+        XCTAssertEqual(draft.kind, .expense)
+        XCTAssertFalse(draft.isConfident)
+        XCTAssertEqual(draft.title, "Today was actually a really good day")
     }
 
     func testAmbiguousShortFragmentIsUnconfident() throws {

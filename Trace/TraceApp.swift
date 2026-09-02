@@ -9,7 +9,7 @@ struct TraceApp: App {
     let container: ModelContainer = {
         do {
             return try ModelContainer(
-                for: Entry.self,
+                for: Entry.self, Goal.self, JournalEntry.self, LiveNote.self,
                 configurations: ModelConfiguration(isStoredInMemoryOnly: false)
             )
         } catch {

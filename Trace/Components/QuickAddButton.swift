@@ -14,8 +14,9 @@ struct QuickAddButton: View {
                 .font(.system(size: 22, weight: .semibold))
                 .foregroundStyle(.white)
                 .frame(width: 60, height: 60)
-                .background(Color.traceAccent, in: Circle())
+                .background(LinearGradient.traceAccentGradient, in: Circle())
                 .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+                .shadow(color: Color.traceAccent.opacity(0.35), radius: 14, y: 4)
         }
         .buttonStyle(PressableStyle())
         .accessibilityLabel("Quick Add")

@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 struct RootView: View {
-    enum Tab: Hashable { case today, history, stats, settings }
+    enum Tab: Hashable { case today, history, journal, stats, settings }
     @State private var selection: Tab = .today
 
     var body: some View {
@@ -14,6 +14,10 @@ struct RootView: View {
             HistoryView()
                 .tabItem { Label("History", systemImage: "list.bullet") }
                 .tag(Tab.history)
+
+            JournalView()
+                .tabItem { Label("Journal", systemImage: "book.closed") }
+                .tag(Tab.journal)
 
             StatisticsView()
                 .tabItem { Label("Stats", systemImage: "chart.bar") }

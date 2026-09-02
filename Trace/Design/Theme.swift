@@ -25,21 +25,45 @@ enum Theme {
 }
 
 extension Color {
-    /// App background — pure system background so the app feels native.
-    static let traceBackground = Color(.systemBackground)
-    /// Subtle raised surface for the rare grouped element.
-    static let traceSurface = Color(.secondarySystemBackground)
+    /// App background — a soft, tinted surface. Deliberately never pure
+    /// black or pure white; see `TraceBackground` for the atmospheric wash
+    /// built on top of this base.
+    static let traceBackground = Color(
+        light: Color(hex: 0xF5F4F2),
+        dark: Color(hex: 0x1D1D1D)   // Jet Black
+    )
+    /// Primary raised surface — cards, the Quick Add interpretation panel,
+    /// List/Form rows.
+    static let traceSurface = Color(
+        light: Color(hex: 0xFFFFFF),
+        dark: Color(hex: 0x23212C)   // Cosmic
+    )
+    /// A second, warmer surface tone used sparingly — the rare element that
+    /// wants to sit apart from `traceSurface`, and one of the two washes
+    /// `TraceBackground` blends in.
+    static let traceSurfaceSecondary = Color(
+        light: Color(hex: 0xECE9EA),
+        dark: Color(hex: 0x32292F)   // Wine Ash
+    )
     /// Hairline separators.
     static let traceSeparator = Color(.separator)
-    /// The single accent. A calm ink-indigo that reads well in both schemes.
+    /// The single accent — Violet. The dark variant is lifted a little from
+    /// the base palette's #36255C so it still reads clearly against Jet
+    /// Black; the light variant is the palette's Violet as specified.
     static let traceAccent = Color(
-        light: Color(red: 0.29, green: 0.33, blue: 0.86),
-        dark: Color(red: 0.52, green: 0.56, blue: 0.98)
+        light: Color(hex: 0x36255C),
+        dark: Color(red: 0.58, green: 0.45, blue: 0.85)
     )
-    /// Positive figures (income / net up).
+    /// Positive figures (income / net up / goal achieved).
     static let tracePositive = Color(
         light: Color(red: 0.15, green: 0.52, blue: 0.34),
         dark: Color(red: 0.36, green: 0.78, blue: 0.55)
+    )
+    /// Negative figures (expense / net down / an over-target spending goal).
+    /// A muted, restrained red — clearly "negative" without reading alarmist.
+    static let traceNegative = Color(
+        light: Color(red: 0.72, green: 0.20, blue: 0.18),
+        dark: Color(red: 0.95, green: 0.42, blue: 0.40)
     )
 
     init(light: Color, dark: Color) {
@@ -47,6 +71,26 @@ extension Color {
             traits.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light)
         })
     }
+
+    /// `0xRRGGBB` convenience for the fixed palette hex values above — never
+    /// used for the semantic dynamic colors themselves, only to define them.
+    init(hex: UInt32) {
+        self.init(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255
+        )
+    }
+}
+
+extension LinearGradient {
+    /// Primary-action fill — a restrained violet gradient, not a loud one.
+    /// Used on the one most prominent control (Quick Add); ordinary
+    /// bordered-prominent buttons stay flat `traceAccent` via `.tint`.
+    static let traceAccentGradient = LinearGradient(
+        colors: [Color.traceAccent, Color.traceAccent.opacity(0.8)],
+        startPoint: .topLeading, endPoint: .bottomTrailing
+    )
 }
 
 // MARK: - Typography

@@ -75,8 +75,11 @@ final class QuickAddModel {
             return ParsedDraft(kind: .activity, title: title,
                                durationSeconds: effectiveDurationSeconds, date: Date())
         case .note:
-            let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return ParsedDraft(kind: .note, title: body, note: body, date: Date())
+            // Unreachable via the current UI: the parser never guesses
+            // `.note` anymore and Quick Add's kind picker never offers it
+            // (Live Note replaces it, and isn't an `EntryKind` at all). Kept
+            // only so this switch stays exhaustive over the legacy case.
+            return nil
         }
     }
 }
