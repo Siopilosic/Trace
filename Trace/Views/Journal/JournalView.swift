@@ -19,10 +19,44 @@ struct JournalView: View {
     @State private var editingEntry: JournalEntry?
     @State private var showSettings = false
 
+    /// Whether the search field is focused (keyboard up). Drives the trailing
+    /// bar button between "+" (new entry) and "×" (exit search).
+    @State private var searchActive = false
+
+    /// Date constraint, independent of text search. View state only — survives
+    /// navigation within Journal, resets on relaunch.
+    @State private var dateFilter: JournalDateFilter = .all
+    @State private var showDateFilter = false
+
+    /// The current calendar day, used to resolve `Today` / `Yesterday` in the
+    /// day headers. Refreshed on the day-change notification and when the app
+    /// returns to the foreground so the labels never go stale.
+    @State private var today = Date()
+    @Environment(\.scenePhase) private var scenePhase
+
     private var calendar: Calendar { settings.calendar }
 
+    /// Date filter and text search are independent and combine with AND.
     private var filteredEntries: [JournalEntry] {
-        entries.filter { JournalFilter.matches($0, search: search) }
+        entries.filter {
+            dateFilter.contains($0.createdAt, calendar: calendar)
+                && JournalFilter.matches($0, search: search)
+        }
+    }
+
+    private var emptyMatchMessage: String {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = dateFilter.label(calendar: calendar)
+        switch (query.isEmpty, range) {
+        case (false, .some(let range)):
+            return "Nothing from \(range) matches “\(query)”."
+        case (false, .none):
+            return "Nothing in your journal matches “\(query)”."
+        case (true, .some(let range)):
+            return "No journal entries from \(range)."
+        case (true, .none):
+            return "Nothing here yet."
+        }
     }
 
     private var sections: [(day: Date, entries: [JournalEntry])] {
@@ -49,6 +83,20 @@ struct JournalView: View {
             .traceBackground()
             .navigationTitle("Journal")
             .toolbar {
+                // Date filter — a concept separate from text search. Filled +
+                // tinted icon whenever a constraint is active.
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showDateFilter = true
+                    } label: {
+                        Image(systemName: dateFilter.isActive
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle")
+                    }
+                    .tint(Color.traceAccent)
+                    .accessibilityLabel(dateFilter.isActive ? "Date filter active" : "Filter by Date")
+                }
+
                 // Journal's own settings entry point — jumps straight to the
                 // Journal section of Settings, the same destination reached
                 // via Settings › Journal (mirrors how Goals is reachable
@@ -78,6 +126,15 @@ struct JournalView: View {
                 JournalSettingsView()
             }
         }
+        .sheet(isPresented: $showDateFilter) {
+            JournalDateFilterSheet(filter: $dateFilter, calendar: calendar)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            today = Date()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { today = Date() }
+        }
     }
 
     /// The populated state: the list (or a "no matches" empty state while
@@ -89,7 +146,7 @@ struct JournalView: View {
             if filteredEntries.isEmpty {
                 EmptyStateView(
                     title: "No matches.",
-                    message: "Nothing in your journal matches “\(search)”.",
+                    message: emptyMatchMessage,
                     systemImage: "magnifyingglass"
                 )
             } else {
@@ -135,7 +192,7 @@ struct JournalView: View {
                         .listRowSeparatorTint(Color.traceSeparator.opacity(0.5))
                     }
                 } header: {
-                    Text(Format.journalDayHeader(section.day, calendar: calendar))
+                    Text(JournalDate.sectionTitle(for: section.day, calendar: calendar, reference: today))
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.primary)
                         .textCase(nil)
@@ -154,23 +211,32 @@ struct JournalView: View {
     /// Journal-only.
     private var searchAndAddBar: some View {
         HStack(spacing: Theme.Space.s) {
-            GlassSearchField(text: $search, placeholder: "Search entries")
+            GlassSearchField(text: $search, placeholder: "Search entries", isActive: $searchActive)
 
             Button {
-                showNewEntry = true
+                if searchActive { exitSearch() } else { showNewEntry = true }
             } label: {
-                Image(systemName: "plus")
+                Image(systemName: searchActive ? "xmark" : "plus")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 44, height: 44)
                     .background(.bar, in: Circle())
+                    .contentTransition(.symbolEffect(.replace))
             }
             .buttonStyle(PressableStyle())
-            .accessibilityLabel("New Entry")
+            .accessibilityLabel(searchActive ? "Close Search" : "New Entry")
+            .animation(.snappy(duration: 0.2), value: searchActive)
         }
         .padding(.horizontal, Theme.Space.l)
         .padding(.top, Theme.Space.s)
         .padding(.bottom, Theme.Space.m)
+    }
+
+    /// Tapping "×": drop focus (which dismisses the keyboard via
+    /// `GlassSearchField`), leave search mode, and clear the query.
+    private func exitSearch() {
+        search = ""
+        searchActive = false
     }
 
     private func delete(_ entry: JournalEntry) {

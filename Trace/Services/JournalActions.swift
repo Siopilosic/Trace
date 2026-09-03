@@ -112,4 +112,59 @@ enum JournalActions {
         save(context)
         return imported
     }
+
+    // MARK: Quick Journal (.txt) import — separate from the JSON backup path
+
+    struct QuickJournalImportResult: Equatable {
+        var imported: Int
+        var duplicatesSkipped: Int
+    }
+
+    /// Inserts one `JournalEntry` per parsed Quick Journal entry, using the
+    /// entry's original timestamp as `createdAt` (never the import time), with
+    /// `updatedAt` left equal to `createdAt` exactly as a freshly written entry.
+    ///
+    /// Text is stored **verbatim** — unlike `add`/`update`/`importPayload`
+    /// (JSON), it is not edge-trimmed, so indentation and blank lines a Quick
+    /// Journal entry began or ended with are preserved.
+    ///
+    /// **Deduplication** (no model change): an entry is skipped when an
+    /// existing `JournalEntry` — active or archived — has the identical
+    /// `createdAt` *and* identical `text`. Re-importing the same file is
+    /// therefore a no-op. An imported entry whose text is later edited will,
+    /// on re-import, no longer match and will come back as a new entry; that
+    /// is the accepted trade-off of content-based identity without adding a
+    /// source-id field to the schema.
+    ///
+    /// Never touches or deletes existing entries.
+    @discardableResult
+    static func importQuickJournal(
+        _ parsed: [QuickJournalImport.ParsedEntry],
+        in context: ModelContext
+    ) -> QuickJournalImportResult {
+        let existing = (try? context.fetch(FetchDescriptor<JournalEntry>())) ?? []
+        var seen = Set(existing.map(dedupeKey))
+
+        var imported = 0
+        var duplicates = 0
+        for item in parsed {
+            guard !item.text.isEmpty else { continue }
+            let key = dedupeKey(createdAt: item.timestamp, text: item.text)
+            guard !seen.contains(key) else { duplicates += 1; continue }
+            seen.insert(key)
+
+            // JournalEntry.init sets updatedAt == createdAt; leave it.
+            context.insert(JournalEntry(text: item.text, createdAt: item.timestamp))
+            imported += 1
+        }
+        save(context)
+        return QuickJournalImportResult(imported: imported, duplicatesSkipped: duplicates)
+    }
+
+    private static func dedupeKey(_ entry: JournalEntry) -> String {
+        dedupeKey(createdAt: entry.createdAt, text: entry.text)
+    }
+    private static func dedupeKey(createdAt: Date, text: String) -> String {
+        "\(createdAt.timeIntervalSinceReferenceDate)\u{1F}\(text)"
+    }
 }
