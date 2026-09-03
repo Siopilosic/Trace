@@ -45,6 +45,37 @@ final class JournalActionsTests: XCTestCase {
         XCTAssertTrue(fetched.contains { $0.text == "Second entry." })
     }
 
+    // MARK: Quick Add → Journal path
+    //
+    // Quick Add's new "Journal" mode calls exactly `JournalActions.add(text:in:)`
+    // — no explicit date, so `createdAt` is "now" — and relies on the same
+    // trim + non-empty guard as the dedicated editor. It must never create a
+    // generic `Entry`.
+
+    func testQuickAddJournalModeCreatesAJournalEntryDatedNow() throws {
+        let context = try makeInMemoryContext()
+        let before = Date()
+        let entry = try XCTUnwrap(
+            JournalActions.add(text: "  A thought jotted from Quick Add.  ", in: context)
+        )
+        let after = Date()
+
+        XCTAssertEqual(entry.text, "A thought jotted from Quick Add.")   // edges trimmed
+        XCTAssertEqual(entry.createdAt, entry.updatedAt)
+        XCTAssertGreaterThanOrEqual(entry.createdAt, before)
+        XCTAssertLessThanOrEqual(entry.createdAt, after)
+        XCTAssertNil(entry.archivedAt)   // a normal, visible entry
+
+        XCTAssertEqual(try context.fetch(FetchDescriptor<JournalEntry>()).count, 1)
+    }
+
+    func testQuickAddJournalModeRejectsEmptyOrWhitespaceText() throws {
+        let context = try makeInMemoryContext()
+        XCTAssertNil(JournalActions.add(text: "", in: context))
+        XCTAssertNil(JournalActions.add(text: "   \n\t  ", in: context))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<JournalEntry>()).count, 0)
+    }
+
     // MARK: Ordering (newest first by createdAt)
 
     func testEntriesOrderNewestFirstByCreatedAt() throws {

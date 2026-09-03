@@ -1,13 +1,14 @@
 import SwiftUI
 import SwiftData
 
-/// The four things you can log from here: Expense, Income, Activity — all
-/// three parsed from free text exactly as before — and Live Note, which
-/// isn't part of that parsing pipeline at all (it's a separate persistent
-/// scratchpad). Picking it switches `QuickAddView` itself into Live Note
-/// mode — there's no hand-off to another screen.
+/// The things you can log from here: Expense, Income, Activity — all three
+/// parsed from free text exactly as before — plus Journal and Live Note.
+/// Neither of the last two is part of the parsing pipeline: picking one
+/// switches `QuickAddView` itself into a plain writing mode (a `JournalEntry`
+/// editor, or the persistent Live Note scratchpad) — there's no hand-off to
+/// another screen.
 private enum QuickAddKind: Hashable, Identifiable, CaseIterable {
-    case expense, income, activity, liveNote
+    case expense, income, activity, journal, liveNote
 
     var id: Self { self }
 
@@ -16,17 +17,19 @@ private enum QuickAddKind: Hashable, Identifiable, CaseIterable {
         case .expense: return "Expense"
         case .income: return "Income"
         case .activity: return "Activity"
+        case .journal: return "Journal"
         case .liveNote: return "Live Note"
         }
     }
 
-    /// `nil` for `.liveNote` — it has no `EntryKind` counterpart.
+    /// `nil` for `.journal` and `.liveNote` — neither has an `EntryKind`
+    /// counterpart (they're their own models).
     var entryKind: EntryKind? {
         switch self {
         case .expense: return .expense
         case .income: return .income
         case .activity: return .activity
-        case .liveNote: return nil
+        case .journal, .liveNote: return nil
         }
     }
 
@@ -40,8 +43,29 @@ private enum QuickAddKind: Hashable, Identifiable, CaseIterable {
     }
 }
 
-/// The fastest path in the app: open, type `"lunch 150"`, hit return, done.
-/// Everything below the text field is optional refinement.
+/// Reports the composer content's measured height so the sheet can size itself to fit.
+private struct ComposerHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Reports the scroll view's top safe-area inset — the space the inline nav bar
+/// and grabber take above the content. Fixed for the device, so the sheet's
+/// `.height` detent can add exactly this much (never an over-generous guess
+/// that `.defaultScrollAnchor(.bottom)` would then leave as an empty band under
+/// the grabber). It never depends on the detent, so there's no sizing loop.
+private struct ComposerTopInsetKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Quick Add: pick a kind, fill in that kind's explicit fields, tap Add.
+/// Expense/Income use plain independent fields — a "What", an Amount, and an
+/// optional Description that is never auto-filled from anything.
 struct QuickAddView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
@@ -53,48 +77,99 @@ struct QuickAddView: View {
 
     @State private var model = QuickAddModel()
     @State private var amountText = ""
-    /// Explicit source of truth for which of the four modes is showing.
-    /// `model.effectiveKind` can't carry this on its own — Live Note isn't an
-    /// `EntryKind` at all.
+    /// Explicit source of truth for which mode is showing. `model.effectiveKind`
+    /// can't carry this on its own — Journal and Live Note aren't `EntryKind`s.
     @State private var mode: QuickAddKind = .expense
     @State private var liveNoteText = ""
+    /// The unsaved draft for Journal mode. Discarded on Cancel/dismiss;
+    /// persisted only by `saveJournal()`.
+    @State private var journalText = ""
+    /// Captured when Journal mode is opened — the timestamp shown above the
+    /// composer, matching the `createdAt` the saved entry will get as closely
+    /// as possible. Display only; there is no picker.
+    @State private var journalComposedAt = Date()
     @State private var showLiveNoteDeleteConfirm = false
     @FocusState private var fieldFocused: Bool
+
+    /// The measured height of the composer content (the padded VStack), so the
+    /// sheet hugs its content instead of snapping to a fixed `.medium` and
+    /// leaving a large empty region. Neither measurement below depends on the
+    /// sheet's own height, so sizing can't feed back on itself.
+    @State private var contentHeight: CGFloat = 240
+    /// The scroll view's top safe-area inset (inline nav bar + grabber).
+    @State private var navBarInset: CGFloat = 56
+    /// The sheet's bottom safe-area inset (home indicator), keyboard down.
+    @State private var bottomInset: CGFloat = 34
+
+    /// The resting `.height` detent: content, plus the nav bar above it and the
+    /// home indicator below it — nothing more, so the sheet hugs the fields with
+    /// no empty band under the grabber. When the keyboard opens the system grows
+    /// the sheet on its own; the content stays anchored to the top, right under
+    /// the title, instead of being pushed down behind an empty gap.
+    private var composerHeight: CGFloat {
+        contentHeight + navBarInset + bottomInset
+    }
 
     private let liveNoteCharacterLimit = 180
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: Theme.Space.l) {
-                if mode == .liveNote {
-                    liveNoteTextBox
-                } else {
-                    TextField("What happened?", text: $model.text, axis: .vertical)
-                        .font(.title2)
-                        .focused($fieldFocused)
-                        .submitLabel(.done)
-                        .onSubmit(save)
-                        .lineLimit(1...3)
+            // Compact and content-driven: kind picker, then the fields for the
+            // chosen kind, then the Add button directly after them — no
+            // flexible spacer, no button pinned far from the fields. The
+            // `ScrollView` is only so the fields can scroll if the keyboard
+            // overlaps them; content stays anchored to the top so it sits
+            // directly under the title with no empty band above it.
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Space.l) {
+                    // Kind first — pick explicitly, then fill in that kind's
+                    // fields. Journal and Live Note are peers here.
+                    kindPicker
+
+                    if mode == .liveNote {
+                        liveNoteTextBox
+                    } else if mode == .journal {
+                        journalTextBox
+                    } else {
+                        TextField("What happened?", text: $model.text, axis: .vertical)
+                            .font(.title2)
+                            .focused($fieldFocused)
+                            .submitLabel(.done)
+                            .onSubmit(save)
+                            .lineLimit(1...3)
+                    }
+
+                    if mode.entryKind != nil, model.parsed != nil {
+                        interpretationFields
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    primaryButton
+                        .padding(.top, Theme.Space.xs)
                 }
-
-                // Always visible — Live Note is a first-class option here,
-                // reachable the instant the sheet opens, not just after
-                // typing something for the parser to react to.
-                kindPicker
-
-                if mode != .liveNote, model.parsed != nil {
-                    interpretationFields
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-
-                Spacer(minLength: 0)
-
-                primaryButton
+                .padding(Theme.Space.l)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: ComposerHeightKey.self, value: proxy.size.height)
+                    }
+                )
             }
-            .padding(Theme.Space.l)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: ComposerTopInsetKey.self, value: proxy.safeAreaInsets.top)
+                }
+            )
+            .scrollBounceBehavior(.basedOnSize)
+            .scrollDismissesKeyboard(.interactively)
             .traceBackground()
             .navigationTitle("Quick Add")
             .navigationBarTitleDisplayMode(.inline)
+            .onPreferenceChange(ComposerHeightKey.self) { height in
+                if height > 0 { contentHeight = height }
+            }
+            .onPreferenceChange(ComposerTopInsetKey.self) { inset in
+                if inset > 0 { navBarInset = inset }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(mode == .liveNote ? "Done" : "Cancel") { dismiss() }
@@ -112,6 +187,9 @@ struct QuickAddView: View {
                 liveNoteText = draftNotes.first?.text ?? ""
                 reconcileLiveActivityState()
             }
+            .onChange(of: mode) { _, newMode in
+                if newMode == .journal { journalComposedAt = Date() }
+            }
             .onChange(of: liveNoteText) { _, newValue in
                 if newValue.count > liveNoteCharacterLimit {
                     liveNoteText = String(newValue.prefix(liveNoteCharacterLimit))
@@ -125,7 +203,28 @@ struct QuickAddView: View {
                 Button("Delete", role: .destructive) { deleteLiveNote() }
             }
         }
-        .presentationDetents([.medium, .large])
+        .background(
+            GeometryReader { proxy in
+                // Read the home-indicator inset here, outside the scroll view,
+                // where the keyboard hasn't swallowed it.
+                Color.clear
+                    .onAppear {
+                        let v = proxy.safeAreaInsets.bottom
+                        if v > 0, v < 60 { bottomInset = v }   // home indicator, never the keyboard
+                    }
+                    .onChange(of: proxy.safeAreaInsets.bottom) { _, v in
+                        if v > 0, v < 60 { bottomInset = v }
+                    }
+            }
+        )
+        // Rest at a detent that hugs the content. The parsed kinds get only
+        // that one, so when the keyboard opens the system grows the sheet just
+        // enough to clear it rather than snapping to `.large` and stranding the
+        // top-anchored fields above a big empty band. Journal / Live Note keep
+        // the draggable `.large` for long-form writing.
+        .presentationDetents(
+            mode.entryKind == nil ? [.height(composerHeight), .large] : [.height(composerHeight)]
+        )
         .presentationDragIndicator(.visible)
     }
 
@@ -134,7 +233,7 @@ struct QuickAddView: View {
 
     private var kindPicker: some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
-            if mode != .liveNote, model.needsKindConfirmation {
+            if mode.entryKind != nil, model.needsKindConfirmation {
                 Text("Not sure what this is — pick one.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -176,6 +275,41 @@ struct QuickAddView: View {
         }
     }
 
+    // MARK: Journal mode — a plain writing box that creates a real
+    // `JournalEntry` via the existing `JournalActions`. Same look as the
+    // dedicated Journal editor (serif body, "Write something…").
+
+    private var journalTextBox: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            // Same date/time treatment as the dedicated `JournalEditorView`.
+            Text("\(Format.journalDayHeader(journalComposedAt, calendar: AppSettings.shared.calendar)) · \(Format.time(journalComposedAt))")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            ZStack(alignment: .topLeading) {
+                if journalText.isEmpty {
+                    Text("Write something…")
+                        .font(.system(.body, design: .serif))
+                        .foregroundStyle(.tertiary)
+                        .padding(.top, 8)
+                        .padding(.leading, 5)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $journalText)
+                    .font(.system(.body, design: .serif))
+                    .scrollContentBackground(.hidden)
+                    .focused($fieldFocused)
+            }
+            .padding(Theme.Space.m)
+            .frame(height: 140)
+            .background(Color.traceSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.medium, style: .continuous))
+        }
+    }
+
+    private var isJournalEmpty: Bool {
+        journalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     @ViewBuilder
     private var primaryButton: some View {
         if mode == .liveNote {
@@ -202,8 +336,8 @@ struct QuickAddView: View {
             .buttonBorderShape(.capsule)
             .controlSize(.large)
             .disabled(isLiveNoteEmpty)
-        } else {
-            Button(action: save) {
+        } else if mode == .journal {
+            Button(action: saveJournal) {
                 Text("Add")
                     .font(.headline)
                     .frame(maxWidth: .infinity)
@@ -211,7 +345,21 @@ struct QuickAddView: View {
             .buttonStyle(.borderedProminent)
             .buttonBorderShape(.capsule)
             .controlSize(.large)
-            .disabled(model.makeDraft() == nil)
+            .disabled(isJournalEmpty)
+        } else {
+            Button(action: save) {
+                Text("Add")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            // Colour depends ONLY on validity: `traceAccent` when saveable,
+            // the system's disabled grey otherwise. `canSave` is a pure
+            // function of the field values, so keyboard/focus never affect it.
+            .tint(Color.traceAccent)
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
+            .disabled(!model.canSave)
         }
     }
 
@@ -284,7 +432,14 @@ struct QuickAddView: View {
                     }
                 }
 
+                // Independent — never seeded from the "What" field or the
+                // parser. Expense/Income only.
+                TextField("Description", text: titleBinding)
+                    .foregroundStyle(.primary)
+
             case .activity:
+                // Activity has no Description field — its name is the "What"
+                // input, its only other field is Duration.
                 VStack(alignment: .leading, spacing: Theme.Space.xs) {
                     Text("Duration")
                         .foregroundStyle(.secondary)
@@ -295,15 +450,9 @@ struct QuickAddView: View {
                 // Unreachable — see `QuickAddModel.makeDraft()`.
                 EmptyView()
             }
-
-            if model.effectiveKind != .note {
-                TextField("Description", text: titleBinding)
-                    .foregroundStyle(.primary)
-            }
         }
         .padding(Theme.Space.m)
         .background(Color.traceSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.medium))
-        .onChange(of: model.parsed) { _, _ in syncEditableFields() }
     }
 
     private var categoryMenu: some View {
@@ -342,6 +491,8 @@ struct QuickAddView: View {
         )
     }
 
+    /// Expense/Income Description — fully independent: reads and writes only
+    /// the manual value, never the parser. Activity does not use this.
     private var titleBinding: Binding<String> {
         Binding(
             get: { model.effectiveTitle },
@@ -365,20 +516,18 @@ struct QuickAddView: View {
         )
     }
 
-    private func syncEditableFields() {
-        if let amount = model.effectiveAmount {
-            let formatted = amount == amount.rounded() ? String(Int(amount)) : String(amount)
-            if Double(amountText.replacingOccurrences(of: ",", with: "")) != amount {
-                amountText = formatted
-            }
-        } else {
-            amountText = ""
-        }
-    }
-
     private func save() {
         guard let draft = model.makeDraft() else { return }
         EntryActions.add(draft, in: context)
+        Haptics.logged()
+        dismiss()
+    }
+
+    /// Creates a real `JournalEntry` through the existing Journal path —
+    /// `JournalActions.add` applies the same trim + non-empty guard as the
+    /// dedicated editor and stamps `createdAt` with "now". No generic `Entry`.
+    private func saveJournal() {
+        guard JournalActions.add(text: journalText, in: context) != nil else { return }
         Haptics.logged()
         dismiss()
     }

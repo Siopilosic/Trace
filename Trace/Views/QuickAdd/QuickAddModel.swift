@@ -39,13 +39,19 @@ final class QuickAddModel {
         return !parsed.isConfident
     }
 
+    /// The Description / name field — **entirely manual**. The parser never
+    /// seeds it or overwrites it; `parsed.title` is used only as a save-time
+    /// fallback for an activity's name (see ``makeDraft()``), never shown in
+    /// the field.
     var effectiveTitle: String {
-        if let manualTitle, !manualTitle.isEmpty { return manualTitle }
-        return parsed?.title ?? ""
+        manualTitle ?? ""
     }
 
+    /// The amount is **entirely manual** for Quick Add's Expense/Income form —
+    /// the parser's read of the "What" text (`parsed?.amount`) is deliberately
+    /// ignored so numbers in prose ("Uber 180", "Lunch 1") never pre-fill it.
     var effectiveAmount: Double? {
-        manualAmount ?? parsed?.amount
+        manualAmount
     }
 
     var effectiveCategory: ExpenseCategory? {
@@ -56,23 +62,37 @@ final class QuickAddModel {
         manualDurationSeconds ?? parsed?.durationSeconds
     }
 
+    /// Whether the current fields form a saveable entry — the **sole** input to
+    /// the Add button's enabled/colour state. A pure function of the field
+    /// values; keyboard and focus have no part in it.
+    var canSave: Bool { makeDraft() != nil }
+
     /// The entry to persist, or `nil` if there's nothing usable yet.
     func makeDraft() -> ParsedDraft? {
         guard parsed != nil else { return nil }
         let kind = effectiveKind
-        var title = effectiveTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { title = kind.displayName }
+        let typed = effectiveTitle.trimmingCharacters(in: .whitespacesAndNewlines)
 
         switch kind {
         case .expense:
             guard let amount = effectiveAmount, amount > 0 else { return nil }
-            return ParsedDraft(kind: .expense, title: title, amount: amount,
-                               category: effectiveCategory, date: Date())
+            return ParsedDraft(kind: .expense, title: typed.isEmpty ? kind.displayName : typed,
+                               amount: amount, category: effectiveCategory, date: Date())
         case .income:
             guard let amount = effectiveAmount, amount > 0 else { return nil }
-            return ParsedDraft(kind: .income, title: title, amount: amount, date: Date())
+            return ParsedDraft(kind: .income, title: typed.isEmpty ? kind.displayName : typed,
+                               amount: amount, date: Date())
         case .activity:
-            return ParsedDraft(kind: .activity, title: title,
+            // An activity's name comes only from the "What" input — the
+            // parser's read of it ("Gym" from "Gym 1h"), else the raw text,
+            // else the generic label. Never `manualTitle` (that's the
+            // Expense/Income Description field, which Activity doesn't use).
+            var name = parsed?.title ?? ""
+            if name.isEmpty {
+                name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if name.isEmpty { name = kind.displayName }
+            return ParsedDraft(kind: .activity, title: name,
                                durationSeconds: effectiveDurationSeconds, date: Date())
         case .note:
             // Unreachable via the current UI: the parser never guesses

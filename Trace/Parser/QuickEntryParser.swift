@@ -6,11 +6,15 @@ import Foundation
 /// in priority order:
 ///
 /// 1. **Duration** — `"Gym 1h"`, `"Python 45m"`, `"Run 1h30m"` → activity
-/// 2. **Amount** — `"McDonald's 320"`, `"Coffee 90"` → expense,
-///    or income when an income cue is present (`"Got paid 20000"`)
+/// 2. **Amount** — a number that is *clearly meant as money* (see
+///    ``moneyAmount(in:)``): `"lunch 300"`, `"300 EGP"`, `"salary 20k"`,
+///    `"spent 300 on lunch"`. Digits that are merely part of a sentence
+///    (`"I ate 300 sandwiches"`) do **not** count. A parsed expense's
+///    description starts empty — only the amount and inferred category carry
+///    over; the user types a description if they want one.
 /// 3. **Neither** — no confident guess. There's no generic "note" kind to
 ///    fall back to anymore (Live Note replaces that); the UI asks the user
-///    to pick explicitly among Expense/Income/Activity/Live Note instead.
+///    to pick explicitly among Expense/Income/Activity/Journal/Live Note.
 ///
 /// Everything here is pure Foundation so it can be unit-tested directly.
 struct QuickEntryParser {
@@ -37,35 +41,39 @@ struct QuickEntryParser {
             )
         }
 
-        if let money = Self.trailingAmount(in: input) {
+        if let money = Self.moneyAmount(in: input) {
             let incomeCue = Self.incomeCue(in: input)
-            var title = Self.clean(input, removing: [money.range] + (incomeCue.map { [$0] } ?? []))
-            title = Self.stripCurrencyWords(title)
+            var descriptionCandidate = Self.clean(input, removing: [money.range] + (incomeCue.map { [$0] } ?? []))
+            descriptionCandidate = Self.stripCurrencyWords(descriptionCandidate)
 
             if incomeCue != nil {
                 return ParsedDraft(
                     kind: .income,
-                    title: Self.titleOrFallback(title, "Income"),
+                    title: Self.titleOrFallback(descriptionCandidate, "Income"),
                     amount: money.value,
                     date: now(),
                     isConfident: true
                 )
             } else {
-                let category = title.isEmpty ? nil : categoryInferencer.category(for: title)
+                // The description candidate is still used to infer a category
+                // and to gauge confidence — but a parsed expense's own
+                // description starts empty, never pre-filled with the input.
+                let category = descriptionCandidate.isEmpty ? nil : categoryInferencer.category(for: descriptionCandidate)
                 return ParsedDraft(
                     kind: .expense,
-                    title: Self.titleOrFallback(title, "Expense"),
+                    title: "",
                     amount: money.value,
                     category: category,
                     date: now(),
-                    isConfident: !title.isEmpty
+                    isConfident: !descriptionCandidate.isEmpty
                 )
             }
         }
 
-        // No number anywhere — genuinely ambiguous (expense? activity? just
-        // a thought for Live Note?). Default to expense as a starting point
-        // but mark it unconfident so the UI nudges the user to actually pick.
+        // No number, or only numbers that read as ordinary prose — genuinely
+        // ambiguous (expense? activity? a thought for Journal / Live Note?).
+        // Default to expense as a starting point but mark it unconfident so
+        // the UI nudges the user to actually pick.
         return ParsedDraft(
             kind: .expense,
             title: input,
@@ -116,32 +124,90 @@ struct QuickEntryParser {
 
     struct AmountMatch { var value: Double; var range: Range<String.Index> }
 
-    private static let amountRegex = try! NSRegularExpression(
-        pattern: #"(?:egp|le|usd|eur|\$|£|€)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\s*(?:egp|le|pounds?|usd|eur)?"#,
+    /// A plain number token: `300`, `4,500`, `12.50` (thousands-grouped form
+    /// tried first so `4,500` isn't read as `4`).
+    private static let numberRegex = try! NSRegularExpression(
+        pattern: #"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?"#
+    )
+    /// The text *before* a number ends with a currency token / symbol.
+    private static let currencyBeforeRegex = try! NSRegularExpression(
+        pattern: #"(?:\begp|\ble|\busd|\beur|\bgbp|\bpounds?|\bdollars?|\beuros?|[$£€])\s*$"#,
+        options: [.caseInsensitive]
+    )
+    /// The text *after* a number begins with a currency token / symbol.
+    private static let currencyAfterRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:egp\b|le\b|usd\b|eur\b|gbp\b|pounds?\b|dollars?\b|euros?\b|[$£€])"#,
+        options: [.caseInsensitive]
+    )
+    /// The text *after* a number is only whitespace, plus at most a lone
+    /// trailing currency token — i.e. the number is the last real token.
+    private static let trailingRegex = try! NSRegularExpression(
+        pattern: #"^\s*(?:(?:egp|le|usd|eur|gbp|pounds?|dollars?|euros?|[$£€])\s*)?$"#,
         options: [.caseInsensitive]
     )
 
-    /// Returns the last money-like number in the string. Handles thousands
-    /// separators, a `k`/`m` multiplier, and surrounding currency tokens.
-    static func trailingAmount(in input: String) -> AmountMatch? {
+    /// Verbs that make a nearby number read as money even mid-sentence
+    /// (`"spent 300 on lunch"`).
+    static let spendingCues = [
+        "spent", "spend", "spending", "paid", "pay", "paying",
+        "bought", "buy", "buying", "cost", "costs", "charged", "priced",
+    ]
+
+    /// The number in `input` that is clearly meant as a monetary amount — or
+    /// `nil` when every number is just part of natural-language text
+    /// (`"I ate 300 sandwiches"`, `"I did 45 pushups"`, `"I watched 3 movies"`).
+    ///
+    /// A number qualifies when: a currency token sits directly beside it
+    /// (`"300 EGP"`, `"EGP 300"`, `"$5"`); it carries a directly-attached
+    /// `k`/`m` multiplier (`"20k"` — a letter cannot follow, so `"3 movies"`
+    /// never multiplies); it is the trailing token of the input (`"lunch 300"`,
+    /// `"Uber 180"`, `"300"`); or the input contains a spending / income cue
+    /// (`"spent 300 on lunch"`). The last qualifying number wins.
+    static func moneyAmount(in input: String) -> AmountMatch? {
         let ns = input as NSString
-        let matches = amountRegex.matches(in: input, range: NSRange(location: 0, length: ns.length))
-            .filter { $0.range(at: 1).location != NSNotFound }
-        guard let match = matches.last else { return nil }
+        let numbers = numberRegex.matches(in: input, range: NSRange(location: 0, length: ns.length))
+        guard !numbers.isEmpty else { return nil }
 
-        let digits = ns.substring(with: match.range(at: 1)).replacingOccurrences(of: ",", with: "")
-        guard var value = Double(digits) else { return nil }
+        let lower = input.lowercased()
+        let hasCue = incomeCue(in: input) != nil
+            || spendingCues.contains { lower.range(of: "\\b\($0)\\b", options: .regularExpression) != nil }
 
-        if match.range(at: 2).location != NSNotFound {
-            switch ns.substring(with: match.range(at: 2)).lowercased() {
-            case "k": value *= 1_000
-            case "m": value *= 1_000_000
-            default: break
+        for match in numbers.reversed() {
+            guard let numberRange = Range(match.range, in: input) else { continue }
+
+            // Optional directly-attached k / m multiplier (no space before it,
+            // no letter after it — so "20k" multiplies but "3 movies" doesn't).
+            var tokenEnd = numberRange.upperBound
+            var multiplier = 1.0
+            if tokenEnd < input.endIndex {
+                let unit = input[tokenEnd].lowercased()
+                let afterUnit = input.index(after: tokenEnd)
+                let unitInsideWord = afterUnit < input.endIndex && input[afterUnit].isLetter
+                if (unit == "k" || unit == "m") && !unitInsideWord {
+                    multiplier = unit == "k" ? 1_000 : 1_000_000
+                    tokenEnd = afterUnit
+                }
             }
-        }
 
-        guard let range = Range(match.range, in: input) else { return nil }
-        return AmountMatch(value: value, range: range)
+            let before = String(input[input.startIndex..<numberRange.lowerBound])
+            let after = String(input[tokenEnd...])
+
+            let qualifies = Self.matches(currencyBeforeRegex, before)
+                || Self.matches(currencyAfterRegex, after)
+                || Self.matches(trailingRegex, after)
+                || multiplier != 1.0
+                || hasCue
+            guard qualifies else { continue }
+
+            let digits = input[numberRange].replacingOccurrences(of: ",", with: "")
+            guard let magnitude = Double(digits) else { continue }
+            return AmountMatch(value: magnitude * multiplier, range: numberRange.lowerBound..<tokenEnd)
+        }
+        return nil
+    }
+
+    private static func matches(_ regex: NSRegularExpression, _ string: String) -> Bool {
+        regex.firstMatch(in: string, range: NSRange(location: 0, length: (string as NSString).length)) != nil
     }
 
     // MARK: - Income cue
